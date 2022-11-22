@@ -82,6 +82,9 @@ After generating the dance in the above step, run the following codes.
 
 It will show exactly the same values reported in the paper. To fasten the computation, comment Line 184 of utils/metrics_new.py after computed the ground-truth feature once. To test another folder, change Line 182 to your destination, or kindly modify this code to a "non hard version" :)
 
+{'fid_k': (30.438073134355463-1.6772671736261092e-06j), 'fid_m': (11.425107290866627-1.5353611794873146e-08j), 'div_k': 7.893093514289611, 'div_m': 6.5698471342905975, 'div_k_gt': 9.479067769947868, 'div_m_gt': 7.322270427420352}
+
+
 ## Choreographic for music in the wild
 
 Bailando is trained on AIST++, which is not able to cover all musics in the wild. For example, musics in AIST++ do not contain lyrics, and could be relatively simple than dance musics in our life. So, to fill the gap, our solution is to finetune the pretrained Bailando on the music(s) for several epochs using the "actor-critic learning" process in our paper.  

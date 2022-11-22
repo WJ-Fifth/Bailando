@@ -22,6 +22,11 @@ class FeatureExtractor:
 
     @staticmethod
     def get_mfcc(melspe_db):
+        """
+        Args:
+            melspe_db:
+        Returns: mfcc feature (20 * n)
+        """
         mfcc = librosa.feature.mfcc(S=melspe_db)
         print(f'{mfcc.shape} -> mfcc')
         return mfcc
@@ -72,7 +77,7 @@ class FeatureExtractor:
 
     @staticmethod
     def get_onset_strength(audio_percussive, sr):
-        onset_env = librosa.onset.onset_strength(audio_percussive, aggregate=np.median, sr=sr)
+        onset_env = librosa.onset.onset_strength(y=audio_percussive, aggregate=np.median, sr=sr)
         print(f'{onset_env.reshape(1, -1).shape} -> onset_env')
         return onset_env
 
@@ -85,7 +90,8 @@ class FeatureExtractor:
     @staticmethod
     def get_onset_beat(onset_env, sr):
         onset_tempo, onset_beats = librosa.beat.beat_track(onset_envelope=onset_env, sr=sr)
-        peaks = librosa.util.peak_pick(onset_env, 3, 3, 3, 5, 0.5, 10)
+        peaks = librosa.util.peak_pick(x=onset_env, pre_max=3, post_max=3,
+                                       pre_avg=3, post_avg=5, delta=0.5, wait=10)
         beats_one_hot = np.zeros(len(onset_env))
         peaks_one_hot = np.zeros(len(onset_env))
         for idx in onset_beats:

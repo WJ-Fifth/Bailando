@@ -5,18 +5,23 @@ import torch.nn as nn
 from .encdec import Encoder, Decoder, assert_shape
 from .bottleneck import NoBottleneck, Bottleneck
 from .utils.logger import average_metrics
+
+
 # from .utils.audio_utils import  audio_postprocess
 
 def dont_update(params):
     for param in params:
         param.requires_grad = False
 
+
 def update(params):
     for param in params:
         param.requires_grad = True
 
+
 def calculate_strides(strides, downs):
     return [stride ** down for stride, down in zip(strides, downs)]
+
 
 # def _loss_fn(loss_fn, x_target, x_pred, hps):
 #     if loss_fn == 'l1':
@@ -39,7 +44,8 @@ def calculate_strides(strides, downs):
 #     else:
 #         assert False, f"Unknown loss_fn {loss_fn}"
 def _loss_fn(x_target, x_pred):
-    return t.mean(t.abs(x_pred - x_target)) 
+    return t.mean(t.abs(x_pred - x_target))
+
 
 class VQVAER(nn.Module):
     def __init__(self, hps, input_dim=72):
@@ -56,7 +62,7 @@ class VQVAER(nn.Module):
         commit = hps.commit
         # spectral = hps.spectral
         # multispectral = hps.multispectral
-        multipliers = hps.hvqvae_multipliers 
+        multipliers = hps.hvqvae_multipliers
         use_bottleneck = hps.use_bottleneck
         if use_bottleneck:
             print('We use bottleneck!')
@@ -64,10 +70,9 @@ class VQVAER(nn.Module):
             print('We do not use bottleneck!')
         if not hasattr(hps, 'dilation_cycle'):
             hps.dilation_cycle = None
-        block_kwargs = dict(width=hps.width, depth=hps.depth, m_conv=hps.m_conv, \
-                        dilation_growth_rate=hps.dilation_growth_rate, \
-                        dilation_cycle=hps.dilation_cycle, \
-                        reverse_decoder_dilation=hps.vqvae_reverse_decoder_dilation)
+        block_kwargs = dict(width=hps.width, depth=hps.depth, m_conv=hps.m_conv,
+                            dilation_growth_rate=hps.dilation_growth_rate, dilation_cycle=hps.dilation_cycle,
+                            reverse_decoder_dilation=hps.vqvae_reverse_decoder_dilation)
 
         self.sample_length = input_shape[0]
         x_shape, x_channels = input_shape[:-1], input_shape[-1]
@@ -83,6 +88,7 @@ class VQVAER(nn.Module):
         else:
             assert len(multipliers) == levels, "Invalid number of multipliers"
             self.multipliers = multipliers
+
         def _block_kwargs(level):
             this_block_kwargs = dict(block_kwargs)
             this_block_kwargs["width"] *= self.multipliers[level]
@@ -90,11 +96,11 @@ class VQVAER(nn.Module):
             return this_block_kwargs
 
         encoder = lambda level: Encoder(x_channels, emb_width, level + 1,
-                                        downs_t[:level+1], strides_t[:level+1], **_block_kwargs(level))
+                                        downs_t[:level + 1], strides_t[:level + 1], **_block_kwargs(level))
         decoder = lambda level: Decoder(x_channels, emb_width, level + 1,
-                                        downs_t[:level+1], strides_t[:level+1], **_block_kwargs(level))
+                                        downs_t[:level + 1], strides_t[:level + 1], **_block_kwargs(level))
         decoder_root = lambda level: Decoder(hps.joint_channel, emb_width, level + 1,
-                                        downs_t[:level+1], strides_t[:level+1], **_block_kwargs(level))
+                                             downs_t[:level + 1], strides_t[:level + 1], **_block_kwargs(level))
         self.encoders = nn.ModuleList()
         self.decoders = nn.ModuleList()
         self.decoders_root = nn.ModuleList()
@@ -123,12 +129,12 @@ class VQVAER(nn.Module):
     def preprocess(self, x):
         # x: NTC [-1,1] -> NCT [-1,1]
         assert len(x.shape) == 3
-        x = x.permute(0,2,1).float()
+        x = x.permute(0, 2, 1).float()
         return x
 
     def postprocess(self, x):
         # x: NTC [-1,1] <- NCT [-1,1]
-        x = x.permute(0,2,1)
+        x = x.permute(0, 2, 1)
         return x
 
     def _decode(self, zs, start_level=0, end_level=None):
@@ -140,13 +146,14 @@ class VQVAER(nn.Module):
         assert len(xs_quantised) == end_level - start_level
 
         # Use only lowest level
-        decoder, decoder_root, x_quantised = self.decoders[start_level], self.decoders_root[start_level], xs_quantised[0:1]
+        decoder, decoder_root, x_quantised = self.decoders[start_level], self.decoders_root[start_level], xs_quantised[
+                                                                                                          0:1]
 
         x_out = decoder(x_quantised, all_levels=False)
         x_vel_out = decoder_root(x_quantised, all_levels=False)
         x_out = self.postprocess(x_out)
         x_vel_out = self.postprocess(x_vel_out)
-        
+
         _, _, cc = x_vel_out.size()
         x_out[:, :, :cc] = x_vel_out.clone()
         return x_out
@@ -205,35 +212,20 @@ class VQVAER(nn.Module):
                 encoder = self.encoders[level].eval()
                 x_out = encoder(x_in)
                 xs.append(x_out[-1])
-
             zs, xs_quantised, commit_losses, quantiser_metrics = self.bottleneck(xs)
             x_outs = []
             x_outs_vel = []
-            
+
         for level in range(self.levels):
             decoder = self.decoders[level].eval()
             decoder_root = self.decoders_root[level]
-            x_out = decoder(xs_quantised[level:level+1], all_levels=False)
-            x_vel_out = decoder_root(xs_quantised[level:level+1], all_levels=False)
-            
+            x_out = decoder(xs_quantised[level:level + 1], all_levels=False)
+            x_vel_out = decoder_root(xs_quantised[level:level + 1], all_levels=False)
+
             # x_out[:, :, :cc] = x_vel_out
             assert_shape(x_out, x_in.shape)
             x_outs.append(x_out)
             x_outs_vel.append(x_vel_out)
-
-        # Loss
-        # def _spectral_loss(x_target, x_out, self.hps):
-        #     if hps.use_nonrelative_specloss:
-        #         sl = spectral_loss(x_target, x_out, self.hps) / hps.bandwidth['spec']
-        #     else:
-        #         sl = spectral_convergence(x_target, x_out, self.hps)
-        #     sl = t.mean(sl)
-        #     return sl
-
-        # def _multispectral_loss(x_target, x_out, self.hps):
-        #     sl = multispectral_loss(x_target, x_out, self.hps) / hps.bandwidth['spec']
-        #     sl = t.mean(sl)
-        #     return sl
 
         recons_loss = t.zeros(()).to(x.device)
         regularization = t.zeros(()).to(x.device)
@@ -251,7 +243,7 @@ class VQVAER(nn.Module):
             # x_out = audio_postprocess(x_out, self.hps)
             _, _, cc = x_out_vel.size()
             x_out[:, :, :cc] = x_out_vel
-            
+
             # this_recons_loss = _loss_fn(loss_fn, x_target, x_out, hps)
             this_recons_loss = _loss_fn(x_target, x_out_vel)
             # this_spec_loss = _spectral_loss(x_target, x_out, hps)
@@ -264,8 +256,9 @@ class VQVAER(nn.Module):
             # multispec_loss += this_multispec_loss
             # regularization += t.mean((x_out[:, 2:] + x_out[:, :-2] - 2 * x_out[:, 1:-1])**2)
 
-            acceleration_loss +=  _loss_fn( x_out_vel[:, 1:] - x_out_vel[:, :-1], x_target[:, 1:] - x_target[:, :-1])
-            # acceleration_loss +=  _loss_fn(x_out[:, 2:] + x_out[:, :-2] - 2 * x_out[:, 1:-1], x_target[:, 2:] + x_target[:, :-2] - 2 * x_target[:, 1:-1])
+            acceleration_loss += _loss_fn(x_out_vel[:, 1:] - x_out_vel[:, :-1], x_target[:, 1:] - x_target[:, :-1])
+            # acceleration_loss +=  _loss_fn(x_out[:, 2:] + x_out[:, :-2] - 2 * x_out[:, 1:-1], x_target[:,
+            # 2:] + x_target[:, :-2] - 2 * x_target[:, 1:-1])
         # if not hasattr(self.)
         # commit_loss = sum(commit_losses)
         # loss = recons_loss + self.spectral * spec_loss + self.multispectral * multispec_loss + self.commit * commit_loss
@@ -276,7 +269,7 @@ class VQVAER(nn.Module):
             # sc = t.mean(spectral_convergence(x_target, x_out, hps))
             # l2_loss = _loss_fn("l2", x_target, x_out, hps)
             l1_loss = _loss_fn(x_target, x_out_vel)
-            
+
             # linf_loss = _loss_fn("linf", x_target, x_out, hps)
 
         quantiser_metrics = average_metrics(quantiser_metrics)

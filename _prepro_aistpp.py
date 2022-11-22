@@ -29,7 +29,7 @@ parser.add_argument('--split_train_file', type=str, default='aist_plusplus_final
 parser.add_argument('--split_test_file', type=str, default='aist_plusplus_final/splits/crossmodal_test.txt')
 parser.add_argument('--split_val_file', type=str, default='aist_plusplus_final/splits/crossmodal_val.txt')
 
-parser.add_argument('--sampling_rate', type=int, default=15360*2)
+parser.add_argument('--sampling_rate', type=int, default=15360 * 2)
 args = parser.parse_args()
 
 extractor = FeatureExtractor()
@@ -43,10 +43,11 @@ split_train_file = args.split_train_file
 split_test_file = args.split_test_file
 split_val_file = args.split_val_file
 
+
 def make_music_dance_set(video_dir, annotation_dir):
     print('---------- Extract features from raw audio ----------')
     # print(annotation_dir)
-    aist_dataset = AISTDataset(annotation_dir) 
+    aist_dataset = AISTDataset(annotation_dir)
 
     musics = []
     dances = []
@@ -57,7 +58,7 @@ def make_music_dance_set(video_dir, annotation_dir):
     # music_dance_keys = []
 
     # onset_beats = []
-    audio_fnames = sorted(os.listdir(video_dir))
+    # audio_fnames = sorted(os.listdir(video_dir))
     # dance_fnames = sorted(os.listdir(dance_dir))
     # audio_fnames = audio_fnames[:20]  # for debug
     # print(f'audio_fnames: {audio_fnames}')
@@ -79,15 +80,17 @@ def make_music_dance_set(video_dir, annotation_dir):
 
     ii = 0
     all_names = train + test
+
     for audio_fname in all_names:
         # if ii > 1:
         #     break
         # ii += 1
         video_file = os.path.join(video_dir, audio_fname.split('_')[4] + '.wav')
         print(f'Process -> {video_file}')
-        print(audio_fname)
+        # print("audio_fname", audio_fname)
+
         seq_name, _ = AISTDataset.get_seq_name(audio_fname.replace('cAll', 'c02'))
-        
+
         if (seq_name not in train) and (seq_name not in test):
             print(f'Not in set!')
             continue
@@ -97,7 +100,7 @@ def make_music_dance_set(video_dir, annotation_dir):
             continue
 
         sr = args.sampling_rate
-        
+
         loader = None
         try:
             loader = essentia.standard.MonoLoader(filename=video_file, sampleRate=sr)
@@ -105,19 +108,18 @@ def make_music_dance_set(video_dir, annotation_dir):
             continue
 
         fnames.append(seq_name)
-        print(seq_name)
-        
+        # print("seq_name", seq_name)
+
         ### load audio features ###
 
-    
         audio = loader()
         audio = np.array(audio).T
 
-        feature =  extract_acoustic_feature(audio, sr)
+        feature = extract_acoustic_feature(audio, sr)
         musics.append(feature.tolist())
 
         ### load pose sequence ###
-       # for seq_name in tqdm(seq_names):
+        # for seq_name in tqdm(seq_names):
         print(f'Process -> {seq_name}')
         smpl_poses, smpl_scaling, smpl_trans = AISTDataset.load_motion(
             aist_dataset.motion_dir, seq_name)
@@ -127,21 +129,18 @@ def make_music_dance_set(video_dir, annotation_dir):
             global_orient=torch.from_numpy(smpl_poses[:, 0:1]).float(),
             body_pose=torch.from_numpy(smpl_poses[:, 1:]).float(),
             transl=torch.from_numpy(smpl_trans / smpl_scaling).float(),
-            ).joints.detach().numpy()[:, 0:24, :]
+        ).joints.detach().numpy()[:, 0:24, :]
         nframes = keypoints3d.shape[0]
         dances.append(keypoints3d.reshape(nframes, -1).tolist())
         print(np.shape(dances[-1]))  # (nframes, 72)
-
-        
 
     # return None, None, None
     return musics, dances, fnames
 
 
 def extract_acoustic_feature(audio, sr):
-
     melspe_db = extractor.get_melspectrogram(audio, sr)
-    
+
     mfcc = extractor.get_mfcc(melspe_db)
     mfcc_delta = extractor.get_mfcc_delta(mfcc)
     # mfcc_delta2 = get_mfcc_delta2(mfcc)
@@ -149,7 +148,7 @@ def extract_acoustic_feature(audio, sr):
     audio_harmonic, audio_percussive = extractor.get_hpss(audio)
     # harmonic_melspe_db = get_harmonic_melspe_db(audio_harmonic, sr)
     # percussive_melspe_db = get_percussive_melspe_db(audio_percussive, sr)
-    chroma_cqt = extractor.get_chroma_cqt(audio_harmonic, sr, octave=7 if sr==15360*2 else 5)
+    chroma_cqt = extractor.get_chroma_cqt(audio_harmonic, sr, octave=7 if sr == 15360 * 2 else 5)
     # chroma_stft = extractor.get_chroma_stft(audio_harmonic, sr)
 
     onset_env = extractor.get_onset_strength(audio_percussive, sr)
@@ -162,36 +161,37 @@ def extract_acoustic_feature(audio, sr):
 
     feature = np.concatenate([
         # melspe_db,
-        mfcc, # 20
-        mfcc_delta, # 20
+        mfcc,  # 20
+        mfcc_delta,  # 20
         # mfcc_delta2,
         # harmonic_melspe_db,
         # percussive_melspe_db,
         # chroma_stft,
-        chroma_cqt, # 12
-        onset_env, # 1
-        onset_beat, # 1
+        chroma_cqt,  # 12
+        onset_env,  # 1
+        onset_beat,  # 1
         tempogram
     ], axis=0)
 
-            # mfcc, #20
-            # mfcc_delta, #20
+    # mfcc, #20
+    # mfcc_delta, #20
 
-            # chroma_cqt, #12
-            # onset_env, # 1
-            # onset_beat, #1
+    # chroma_cqt, #12
+    # onset_env, # 1
+    # onset_beat, #1
 
     feature = feature.transpose(1, 0)
     print(f'acoustic feature -> {feature.shape}')
 
     return feature
 
+
 def align(musics, dances):
     print('---------- Align the frames of music and dance ----------')
     assert len(musics) == len(dances), \
         'the number of audios should be equal to that of videos'
-    new_musics=[]
-    new_dances=[]
+    new_musics = []
+    new_dances = []
     for i in range(len(musics)):
         min_seq_len = min(len(musics[i]), len(dances[i]))
         print(f'music -> {np.array(musics[i]).shape}, ' +
@@ -204,7 +204,6 @@ def align(musics, dances):
     return new_musics, new_dances, musics
 
 
-
 def split_data(fnames):
     train = []
     test = []
@@ -212,7 +211,7 @@ def split_data(fnames):
     print('---------- Split data into train and test ----------')
 
     print(fnames)
-    
+
     train_file = open(split_train_file, 'r')
     for fname in train_file.readlines():
         train.append(fnames.index(fname.strip()))
@@ -264,18 +263,15 @@ def save(args, musics, dances, fnames, musics_raw):
         with open(os.path.join(args.test_dir, f'{fnames[idx]}.json'), 'w') as f:
             sample_dict = {
                 'id': fnames[idx],
-                'music_array': musics_raw[idx], # musics[idx+i],
+                'music_array': musics_raw[idx],  # musics[idx+i],
                 'dance_array': dances[idx]
             }
             # print(sample_dict)
             json.dump(sample_dict, f)
 
 
-
 if __name__ == '__main__':
-    musics, dances, fnames = make_music_dance_set(args.input_video_dir, args.input_annotation_dir) 
-
+    musics, dances, fnames = make_music_dance_set(args.input_video_dir, args.input_annotation_dir)
+    exit()
     musics, dances, musics_raw = align(musics, dances)
     save(args, musics, dances, fnames, musics_raw)
-
-

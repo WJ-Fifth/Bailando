@@ -1,5 +1,5 @@
 import numpy as np
-import torch as t
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import models.utils.dist_adapter as dist
@@ -17,7 +17,7 @@ class BottleneckBlock(nn.Module):
         self.init = False
         self.k_sum = None
         self.k_elem = None
-        self.register_buffer('k', t.zeros(self.k_bins, self.emb_width).cuda())
+        self.register_buffer('k', torch.zeros(self.k_bins, self.emb_width).cuda())
 
     def _tile(self, x):
         d, ew = x.shape
@@ -25,7 +25,7 @@ class BottleneckBlock(nn.Module):
             n_repeats = (self.k_bins + d - 1) // d
             std = 0.01 / np.sqrt(ew)
             x = x.repeat(n_repeats, 1)
-            x = x + t.randn_like(x) * std
+            x = x + torch.randn_like(x) * std
         return x
 
     def init_k(self, x):
@@ -33,19 +33,19 @@ class BottleneckBlock(nn.Module):
         self.init = True
         # init k_w using random vectors from x
         y = self._tile(x)
-        _k_rand = y[t.randperm(y.shape[0])][:k_bins]
+        _k_rand = y[torch.randperm(y.shape[0])][:k_bins]
         # dist.broadcast(_k_rand, 0)
         self.k = _k_rand
         assert self.k.shape == (k_bins, emb_width)
         self.k_sum = self.k
-        self.k_elem = t.ones(k_bins, device=self.k.device)
+        self.k_elem = torch.ones(k_bins, device=self.k.device)
 
     def restore_k(self, num_tokens=None, threshold=1.0):
         mu, emb_width, k_bins = self.mu, self.emb_width, self.k_bins
         self.init = True
         assert self.k.shape == (k_bins, emb_width)
         self.k_sum = self.k.clone()
-        self.k_elem = t.ones(k_bins, device=self.k.device)
+        self.k_elem = torch.ones(k_bins, device=self.k.device)
         if num_tokens is not None:
             expected_usage = num_tokens / k_bins
             self.k_elem.data.mul_(expected_usage)
@@ -54,15 +54,15 @@ class BottleneckBlock(nn.Module):
 
     def update_k(self, x, x_l):
         mu, emb_width, k_bins = self.mu, self.emb_width, self.k_bins
-        with t.no_grad():
+        with torch.no_grad():
             # Calculate new centres
-            x_l_onehot = t.zeros(k_bins, x.shape[0], device=x.device)  # k_bins, N * L
+            x_l_onehot = torch.zeros(k_bins, x.shape[0], device=x.device)  # k_bins, N * L
             x_l_onehot.scatter_(0, x_l.view(1, x.shape[0]), 1)
 
-            _k_sum = t.matmul(x_l_onehot, x)  # k_bins, w
+            _k_sum = torch.matmul(x_l_onehot, x)  # k_bins, w
             _k_elem = x_l_onehot.sum(dim=-1)  # k_bins
             y = self._tile(x)
-            _k_rand = y[t.randperm(y.shape[0])][:k_bins]
+            _k_rand = y[torch.randperm(y.shape[0])][:k_bins]
 
             # dist.broadcast(_k_rand, 0)
             # dist.all_reduce(_k_sum)
@@ -75,11 +75,11 @@ class BottleneckBlock(nn.Module):
             usage = (self.k_elem.view(k_bins, 1) >= self.threshold).float()
             self.k = usage * (self.k_sum.view(k_bins, emb_width) / self.k_elem.view(k_bins, 1)) \
                      + (1 - usage) * _k_rand
-            _k_prob = _k_elem / t.sum(_k_elem)  # x_l_onehot.mean(dim=-1)  # prob of each bin
-            entropy = -t.sum(_k_prob * t.log(_k_prob + 1e-8))  # entropy ie how diverse
+            _k_prob = _k_elem / torch.sum(_k_elem)  # x_l_onehot.mean(dim=-1)  # prob of each bin
+            entropy = - torch.sum(_k_prob * torch.log(_k_prob + 1e-8))  # entropy ie how diverse
             used_curr = (_k_elem >= self.threshold).sum()
-            usage = t.sum(usage)
-            dk = t.norm(self.k - old_k) / np.sqrt(np.prod(old_k.shape))
+            usage = torch.sum(usage)
+            dk = torch.norm(self.k - old_k) / np.sqrt(np.prod(old_k.shape))
         return dict(entropy=entropy,
                     used_curr=used_curr,
                     usage=usage,
@@ -91,10 +91,10 @@ class BottleneckBlock(nn.Module):
         x = x.view(-1, x.shape[-1])  # x_en = (N * L, w), k_j = (w, k_bins)
 
         if x.shape[-1] == self.emb_width:
-            prenorm = t.norm(x - t.mean(x)) / np.sqrt(np.prod(x.shape))
+            prenorm = torch.norm(x - torch.mean(x)) / np.sqrt(np.prod(x.shape))
         elif x.shape[-1] == 2 * self.emb_width:
             x1, x2 = x[...,:self.emb_width], x[...,self.emb_width:]
-            prenorm = (t.norm(x1 - t.mean(x1)) / np.sqrt(np.prod(x1.shape))) + (t.norm(x2 - t.mean(x2)) / np.sqrt(np.prod(x2.shape)))
+            prenorm = (torch.norm(x1 - torch.mean(x1)) / np.sqrt(np.prod(x1.shape))) + (torch.norm(x2 - torch.mean(x2)) / np.sqrt(np.prod(x2.shape)))
 
             # Normalise
             x = x1 + x2
@@ -112,10 +112,10 @@ class BottleneckBlock(nn.Module):
     def quantise(self, x):
         # Calculate latent code x_l
         k_w = self.k.t()
-        distance = t.sum(x ** 2, dim=-1, keepdim=True) - 2 * t.matmul(x, k_w) + t.sum(k_w ** 2, dim=0,
+        distance = torch.sum(x ** 2, dim=-1, keepdim=True) - 2 * torch.matmul(x, k_w) + torch.sum(k_w ** 2, dim=0,
                                                                                             keepdim=True)  # (N * L, b)
-        min_distance, x_l = t.min(distance, dim=-1)
-        fit = t.mean(min_distance)
+        min_distance, x_l = torch.min(distance, dim=-1)
+        fit = torch.mean(min_distance)
         return x_l, fit
 
     def dequantise(self, x_l):
@@ -167,7 +167,7 @@ class BottleneckBlock(nn.Module):
             update_metrics = {}
 
         # Loss
-        commit_loss = t.norm(x_d.detach() - x) ** 2 / np.prod(x.shape)
+        commit_loss = torch.norm(x_d.detach() - x) ** 2 / np.prod(x.shape)
 
         # Passthrough
         x_d = x + (x_d - x).detach()
@@ -183,6 +183,7 @@ class Bottleneck(nn.Module):
     def __init__(self, l_bins, emb_width, mu, levels):
         super().__init__()
         self.levels = levels
+
         level_block = lambda level: BottleneckBlock(l_bins, emb_width, mu)
         self.level_blocks = nn.ModuleList()
         for level in range(self.levels):
@@ -236,13 +237,13 @@ class NoBottleneck(nn.Module):
         return zs
 
     def forward(self, xs):
-        zero = t.zeros(()).cuda()
+        zero = torch.zeros(()).cuda()
         commit_losses = [zero for _ in range(self.levels)]
         metrics = [dict(entropy=zero, usage=zero, used_curr=zero, pn=zero, dk=zero) for _ in range(self.levels)]
         return xs, xs, commit_losses, metrics
 
 if __name__ == '__main__':
-    from jukebox.utils.dist_utils import setup_dist_from_mpi
-    rank, local_rank, device = setup_dist_from_mpi(port=29600)
-    bottleneck = Bottleneck(256, 64, 0.99, 2).to(device)
+    # from jukebox.utils.dist_utils import setup_dist_from_mpi
+    # rank, local_rank, device = setup_dist_from_mpi(port=29600)
+    bottleneck = Bottleneck(256, 64, 0.99, 2)
     bottleneck.check()

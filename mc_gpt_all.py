@@ -316,7 +316,7 @@ class MCTall():
                 pose_sample = vqvae.module.decode(zs)
 
                 if config.global_vel:
-                    print('!!!!!')
+                    # print('!!!!!')
                     global_vel = pose_sample[:, :, :3].clone()
                     pose_sample[:, 0, :3] = 0
                     for iii in range(1, pose_sample.size(1)):

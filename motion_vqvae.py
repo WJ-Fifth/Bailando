@@ -15,7 +15,8 @@ from dataset.motion_seq import MoSeq, paired_collate_fn
 # from models.vqvae import VQVAE
 
 from utils.log import Logger
-from utils.functional import str2bool, load_data, load_data_aist, check_data_distribution,visualizeAndWrite,load_test_data_aist,load_test_data
+from utils.functional import str2bool, load_data, load_data_aist, check_data_distribution, visualizeAndWrite, \
+    load_test_data_aist, load_test_data
 # from utils.metrics import quantized_metrics
 from torch.optim import *
 import warnings
@@ -25,6 +26,7 @@ import pdb
 import numpy as np
 import models
 import datetime
+
 warnings.filterwarnings('ignore')
 
 # a, b, c, d = check_data_distribution('/mnt/lustre/lisiyao1/dance/dance2/DanceRevolution/data/aistpp_train')
@@ -34,6 +36,7 @@ import matplotlib.pyplot as plt
 
 class MoQ():
     def __init__(self, args):
+        self.device = None
         self.config = args
         torch.backends.cudnn.benchmark = True
         self._build()
@@ -47,31 +50,33 @@ class MoQ():
         test_loader = self.test_loader
         optimizer = self.optimizer
         log = Logger(self.config, self.expdir)
-        updates = 0
-        
-        if hasattr(config, 'init_weight') and config.init_weight is not None and config.init_weight is not '':
-            print('Use pretrained model!')
-            print(config.init_weight)  
-            checkpoint = torch.load(config.init_weight)
-            model.load_state_dict(checkpoint['model'], strict=False)
-        # self.model.eval()
 
+        updates = 0
+
+        if hasattr(config, 'init_weight') and config.init_weight is not None and config.init_weight != '':
+            print('Use pretrained model!')
+            print(config.init_weight)
+            checkpoint = torch.load(config.init_weight)
+
+            model.load_state_dict(checkpoint['model'], strict=False)
+
+        # set random seed for torch model parameter
         random.seed(config.seed)
         torch.manual_seed(config.seed)
-        #if args.cuda:
         torch.cuda.manual_seed(config.seed)
         self.device = torch.device('cuda' if config.cuda else 'cpu')
-
 
         # Training Loop
         for epoch_i in range(1, config.epoch + 1):
             log.set_progress(epoch_i, len(training_data))
 
             for batch_i, batch in enumerate(training_data):
+
                 # LR Scheduler missing
                 # pose_seq = map(lambda x: x.to(self.device), batch)
                 trans = None
                 pose_seq = batch.to(self.device)
+
                 if config.rotmat:
                     # trans = pose_seq[:, :, :3]
                     pose_seq = pose_seq[:, :, 3:]
@@ -84,7 +89,7 @@ class MoQ():
 
                 else:
                     pose_seq[:, :, :3] = 0
-                # print(pose_seq.size())
+
                 optimizer.zero_grad()
 
                 output, loss, metrics = model(pose_seq)
@@ -97,10 +102,11 @@ class MoQ():
                 stats = {
                     'updates': updates,
                     'loss': loss.item(),
-                    # 'velocity_loss_if_have': metrics[0]['velocity_loss'].item() + metrics[1]['velocity_loss'].item(),
-                    # 'acc_loss_if_have': metrics[0]['acceleration_loss'].item() + metrics[1]['acceleration_loss'].item()
+                    # 'velocity_loss_if_have': metrics[0]['velocity_loss'].item() + metrics[1]['velocity_loss'].item(
+                    # ), 'acc_loss_if_have': metrics[0]['acceleration_loss'].item() + metrics[1][
+                    # 'acceleration_loss'].item() 
                 }
-                #if epoch_i % self.config.log_per_updates == 0:
+                # if epoch_i % self.config.log_per_updates == 0:
                 log.update(stats)
                 updates += 1
 
@@ -126,7 +132,7 @@ class MoQ():
                         # Prepare data
                         # pose_seq_eval = map(lambda x: x.to(self.device), batch_eval)
                         pose_seq_eval = batch_eval.to(self.device)
-                        src_pos_eval = pose_seq_eval[:, :] #
+                        src_pos_eval = pose_seq_eval[:, :]  #
                         global_shift = src_pos_eval[:, :, :3].clone()
                         if config.rotmat:
                             # trans = pose_seq[:, :, :3]
@@ -145,7 +151,7 @@ class MoQ():
                             global_vel = pose_seq_out[:, :, :3].clone()
                             pose_seq_out[:, 0, :3] = 0
                             for iii in range(1, pose_seq_out.size(1)):
-                                pose_seq_out[:, iii, :3] = pose_seq_out[:, iii-1, :3] + global_vel[:, iii-1, :]
+                                pose_seq_out[:, iii, :3] = pose_seq_out[:, iii - 1, :3] + global_vel[:, iii - 1, :]
                             # print('Use vel!')
                             # print(pose_seq_out[:, :, :3])
                         else:
@@ -154,23 +160,26 @@ class MoQ():
                         if config.structure.use_bottleneck:
                             quants_pred = model.module.encode(src_pos_eval)
                             if isinstance(quants_pred, tuple):
-                                quants[self.dance_names[i_eval]] = tuple(quants_pred[ii][0].cpu().data.numpy()[0] for ii in range(len(quants_pred)))
+                                quants[self.dance_names[i_eval]] = tuple(
+                                    quants_pred[ii][0].cpu().data.numpy()[0] for ii in range(len(quants_pred)))
                             else:
-                                quants[self.dance_names[i_eval]] = model.module.encode(src_pos_eval)[0].cpu().data.numpy()[0]
+                                quants[self.dance_names[i_eval]] = \
+                                    model.module.encode(src_pos_eval)[0].cpu().data.numpy()[0]
                         else:
                             quants = None
-                    visualizeAndWrite(results, config,self.visdir, self.dance_names, epoch_i, quants)
+                    visualizeAndWrite(results, config, self.visdir, self.dance_names, epoch_i, quants)
                 model.train()
-            self.schedular.step()  
-
+            self.schedular.step()
 
     def eval(self):
         with torch.no_grad():
             config = self.config
             model = self.model.eval()
+
             epoch_tested = config.testing.ckpt_epoch
 
             ckpt_path = os.path.join(self.ckptdir, f"epoch_{epoch_tested}.pt")
+
             self.device = torch.device('cuda' if config.cuda else 'cpu')
             print("Evaluation...")
             checkpoint = torch.load(ckpt_path)
@@ -190,50 +199,52 @@ class MoQ():
                 # Prepare data
                 # pose_seq_eval = map(lambda x: x.to(self.device), batch_eval)
                 pose_seq_eval = batch_eval.to(self.device)
-                src_pos_eval = pose_seq_eval[:, :] #
+                src_pos_eval = pose_seq_eval[:, :]  #
                 global_shift = src_pos_eval[:, :, :3].clone()
                 if config.rotmat:
                     # trans = pose_seq[:, :, :3]
                     src_pos_eval = src_pos_eval[:, :, 3:]
                 elif config.global_vel:
-                    print('Using Global Velocity')
+                    # print('Using Global Velocity')
                     pose_seq_eval[:, :-1, :3] = pose_seq_eval[:, 1:, :3] - pose_seq_eval[:, :-1, :3]
                     pose_seq_eval[:, -1, :3] = pose_seq_eval[:, -2, :3]
                 else:
                     src_pos_eval[:, :, :3] = 0
-                
+
                 b, t, c = src_pos_eval.size()
                 # t = t - 1
-                
+
                 # diffgt = (src_pos_eval[:, 1:] - src_pos_eval[:, :-1]).view(b, t-1, c//3, 3)
-                
-                pose_seq_out, loss, _ = model(src_pos_eval)  
+
+                pose_seq_out, loss, _ = model(src_pos_eval)
                 # diffout = (pose_seq_out[:, 1:] - pose_seq_out[:, :-1]).view(b, t-1, c//3, 3)
 
                 # diffgt2 = (src_pos_eval[:, 2:] + src_pos_eval[:, :-2] - 2 * src_pos_eval[:, 1:-1]).view(b, t-2, c//3, 3)
                 # diffout2 = (pose_seq_out[:, 2:] + pose_seq_out[:, :-2] - 2 * pose_seq_out[:, 1:-1]).view(b, t-2, c//3, 3)
-                
-                diff = (src_pos_eval - pose_seq_out).view(b, t, c//3, 3)
+
+                diff = (src_pos_eval - pose_seq_out).view(b, t, c // 3, 3)
                 tot_euclidean_error += torch.mean(torch.sqrt(torch.sum(diff ** 2, dim=3)))
                 tot_eval_nums += 1
                 euclidean_errors.append(torch.mean(torch.sqrt(torch.sum(diff ** 2, dim=3))))
-                
-                body_len = (torch.sum((src_pos_eval[:, :, 0:3] - src_pos_eval[:, :, 9:12]) ** 2, dim=2).sqrt().mean() + \
-                torch.sum((src_pos_eval[:, :, 9:12] - src_pos_eval[:, :, 18:21]) ** 2, dim=2).sqrt().mean() + \
-                torch.sum((src_pos_eval[:, :, 27:30] - src_pos_eval[:, :, 18:21]) ** 2, dim=2).sqrt().mean() + \
-                torch.sum((src_pos_eval[:, :, 36:39] - src_pos_eval[:, :, 27:30]) ** 2, dim=2).sqrt().mean() )
+
+                body_len = (torch.sum((src_pos_eval[:, :, 0:3] - src_pos_eval[:, :, 9:12]) ** 2, dim=2).sqrt().mean() +
+                            torch.sum((src_pos_eval[:, :, 9:12] - src_pos_eval[:, :, 18:21]) ** 2,
+                                      dim=2).sqrt().mean() +
+                            torch.sum((src_pos_eval[:, :, 27:30] - src_pos_eval[:, :, 18:21]) ** 2,
+                                      dim=2).sqrt().mean() +
+                            torch.sum((src_pos_eval[:, :, 36:39] - src_pos_eval[:, :, 27:30]) ** 2,
+                                      dim=2).sqrt().mean())
 
                 tot_body_length += body_len
-                
+
                 if config.global_vel:
                     print('Using Global Velocity')
                     global_vel = pose_seq_out[:, :, :3].clone()
                     pose_seq_out[:, 0, :3] = 0
                     for iii in range(1, pose_seq_out.size(1)):
-                        pose_seq_out[:, iii, :3] = pose_seq_out[:, iii-1, :3] + global_vel[:, iii-1, :]
+                        pose_seq_out[:, iii, :3] = pose_seq_out[:, iii - 1, :3] + global_vel[:, iii - 1, :]
                 else:
                     pose_seq_out[:, :, :3] = global_shift
-                
 
                 if config.rotmat:
                     pose_seq_out = torch.cat([global_shift, pose_seq_out], dim=2)
@@ -242,7 +253,9 @@ class MoQ():
                 if config.structure.use_bottleneck:
                     quants_pred = model.module.encode(src_pos_eval)
                     if isinstance(quants_pred, tuple):
-                        quants[self.dance_names[i_eval]] = (model.module.encode(src_pos_eval)[0][0].cpu().data.numpy()[0], model.module.encode(src_pos_eval)[1][0].cpu().data.numpy()[0])
+                        quants[self.dance_names[i_eval]] = (
+                            model.module.encode(src_pos_eval)[0][0].cpu().data.numpy()[0],
+                            model.module.encode(src_pos_eval)[1][0].cpu().data.numpy()[0])
                     else:
                         quants[self.dance_names[i_eval]] = model.module.encode(src_pos_eval)[0].cpu().data.numpy()[0]
                 else:
@@ -254,7 +267,6 @@ class MoQ():
 
                 # mo_gt2 = torch.mean(torch.sqrt(torch.sum(diffgt2 ** 2, dim=3)), dim=2)[0].data.cpu().numpy()
                 # mo_evl2 = torch.mean(torch.sqrt(torch.sum(diffout2 ** 2, dim=3)), dim=2)[0].data.cpu().numpy()
-
 
                 indexs = np.arange(t)
                 # plt.plot(indexs[:-1], mo_evl)
@@ -270,7 +282,7 @@ class MoQ():
                 #     os.mkdir(os.path.join(self.evaldir, 'videos', f"ep{epoch_tested:06d}"))
                 # plt.savefig(os.path.join(self.evaldir, 'videos', f"ep{epoch_tested:06d}", self.dance_names[i_eval]+'_dif2.jpg'))
                 # plt.close()
-                        # exit()
+                # exit()
             print(tot_euclidean_error / (tot_eval_nums * 1.0))
             print('avg body len', tot_body_length / tot_eval_nums)
             print(torch.mean(torch.stack(euclidean_errors)), torch.std(torch.stack(euclidean_errors)))
@@ -279,20 +291,20 @@ class MoQ():
             # metrics = quantized_metrics()
             # print(metrics)
 
-    def visgt(self,):
+    def visgt(self, ):
         config = self.config
         print("Visualizing ground truth")
 
         results = []
         random_id = 0  # np.random.randint(0, 1e4)
-        
+
         for i_eval, batch_eval in enumerate(tqdm(self.test_loader, desc='Generating Dance Poses')):
             pose_seq_eval = batch_eval
             results.append(pose_seq_eval)
 
-        visualizeAndWrite(results, config,self.gtdir, self.dance_names, 0)
+        visualizeAndWrite(results, config, self.gtdir, self.dance_names, 0)
 
-    def analyze_code(self,):
+    def analyze_code(self, ):
         config = self.config
         print("Analyzing codebook")
 
@@ -308,7 +320,7 @@ class MoQ():
         torch.cuda.manual_seed(config.seed)
         self.device = torch.device('cuda' if config.cuda else 'cpu')
         random_id = 0  # np.random.randint(0, 1e4)
-        
+
         for i_eval, batch_eval in enumerate(tqdm(self.training_data, desc='Generating Dance Poses')):
             # Prepare data
             # pose_seq_eval = map(lambda x: x.to(self.device), batch_eval)
@@ -317,18 +329,16 @@ class MoQ():
             quants = model.module.encode(pose_seq_eval)[0].cpu().data.numpy()
             all_quants = np.append(all_quants, quants.reshape(-1)) if all_quants is not None else quants.reshape(-1)
 
-        print(all_quants)
-                    # exit()
         # visualizeAndWrite(results, config,self.gtdir, self.dance_names, 0)
         plt.hist(all_quants, bins=config.structure.l_bins, range=[0, config.structure.l_bins])
 
-        #图片的显示及存储
-        #plt.show()   #这个是图片显示
+        # 图片的显示及存储
+        # plt.show()   #这个是图片显示
         log = datetime.datetime.now().strftime('%Y-%m-%d')
-        plt.savefig(self.histdir1 + '/hist_epoch_' + str(epoch_tested)  + '_%s.jpg' % log)   #图片的存储
+        plt.savefig(self.histdir1 + '/hist_epoch_' + str(epoch_tested) + '_%s.jpg' % log)  # 图片的存储
         plt.close()
 
-    def sample(self,):
+    def sample(self, ):
         config = self.config
         print("Analyzing codebook")
 
@@ -340,78 +350,88 @@ class MoQ():
 
         quants = {}
 
-        results = [] 
+        results = []
 
         if hasattr(config, 'analysis_array') and config.analysis_array is not None:
             # print(config.analysis_array)
             names = [str(ii) for ii in config.analysis_array]
-            print(names)
+            # print(names)
             for ii in config.analysis_array:
-                print(ii)
-                zs =  [(ii * torch.ones((1, self.config.sample_code_length), device='cuda')).long()]
-                print(zs[0].size())
+                # print(ii)
+                zs = [(ii * torch.ones((1, self.config.sample_code_length), device='cuda')).long()]
+                # print(zs[0].size())
                 pose_sample = model.module.decode(zs)
                 if config.rotmat:
-                    pose_sample = torch.cat([torch.zeros(pose_sample.size(0), pose_sample.size(1), 3).cuda(), pose_sample], dim=2)
+                    pose_sample = torch.cat(
+                        [torch.zeros(pose_sample.size(0), pose_sample.size(1), 3).cuda(), pose_sample], dim=2)
                 quants[str(ii)] = zs[0].cpu().data.numpy()[0]
 
                 if config.global_vel:
                     global_vel = pose_sample[:, :, :3].clone()
                     pose_sample[:, 0, :3] = 0
                     for iii in range(1, pose_sample.size(1)):
-                        pose_sample[:, iii, :3] = pose_sample[:, iii-1, :3] + global_vel[:, iii-1, :]
+                        pose_sample[:, iii, :3] = pose_sample[:, iii - 1, :3] + global_vel[:, iii - 1, :]
 
                 results.append(pose_sample)
 
         elif hasattr(config, 'analysis_sequence') and config.analysis_sequence is not None:
             # print(config.analysis_array)
-            names = ['-'.join([str(jj) for jj in ii]) + '-rate' + str(config.sample_code_rate) for ii in config.analysis_sequence]
-            print(names)
+            names = ['-'.join([str(jj) for jj in ii]) + '-rate' + str(config.sample_code_rate) for ii in
+                     config.analysis_sequence]
+            # print(names)
             for ii in config.analysis_sequence:
-                print(ii)
+                # print(ii)
 
-                zs =  [torch.tensor(np.array(ii).repeat(self.config.sample_code_rate), device='cuda')[None].long()]
+                zs = [torch.tensor(np.array(ii).repeat(self.config.sample_code_rate), device='cuda')[None].long()]
                 print(zs[0].size())
                 pose_sample = model.module.decode(zs)
                 if config.rotmat:
-                    pose_sample = torch.cat([torch.zeros(pose_sample.size(0), pose_sample.size(1), 3).cuda(), pose_sample], dim=2)
-                quants['-'.join([str(jj) for jj in ii]) + '-rate' + str(config.sample_code_rate) ] = (zs[0].cpu().data.numpy()[0], zs[0].cpu().data.numpy()[0])
+                    pose_sample = torch.cat(
+                        [torch.zeros(pose_sample.size(0), pose_sample.size(1), 3).cuda(), pose_sample], dim=2)
+                quants['-'.join([str(jj) for jj in ii]) + '-rate' + str(config.sample_code_rate)] = (
+                    zs[0].cpu().data.numpy()[0], zs[0].cpu().data.numpy()[0])
 
                 if False:
                     global_vel = pose_sample[:, :, :3]
                     pose_sample[:, 0, :3] = 0
                     for iii in range(1, pose_sample.size(1)):
-                        pose_sample[:, iii, :3] = pose_sample[:, iii-1, :3] + global_vel[:, iii-1, :]
+                        pose_sample[:, iii, :3] = pose_sample[:, iii - 1, :3] + global_vel[:, iii - 1, :]
 
                 results.append(pose_sample)
 
         elif hasattr(config, 'analysis_pair') and config.analysis_pair is not None:
-            print(config.analysis_pair)
-            names = ['-'.join([str(jj) for jj in ii])  for ii in config.analysis_pair]
-            print(names)
+            # print(config.analysis_pair)
+            names = ['-'.join([str(jj) for jj in ii]) for ii in config.analysis_pair]
+            # print(names)
             for ii in config.analysis_pair:
                 print(ii)
-                zs =  ([torch.tensor(np.array(ii[:1]).repeat(self.config.sample_code_rate), device='cuda')[None].long()], [torch.tensor(np.array(ii[1:2]).repeat(self.config.sample_code_rate), device='cuda')[None].long()])
-                print(zs[0][0].size())
+                zs = ([torch.tensor(np.array(ii[:1]).repeat(self.config.sample_code_rate), device='cuda')[None].long()],
+                      [torch.tensor(np.array(ii[1:2]).repeat(self.config.sample_code_rate), device='cuda')[
+                           None].long()])
+                # print(zs[0][0].size())
                 pose_sample = model.module.decode(zs)
                 if config.rotmat:
-                    pose_sample = torch.cat([torch.zeros(pose_sample.size(0), pose_sample.size(1), 3).cuda(), pose_sample], dim=2)
-                quants['-'.join([str(jj) for jj in ii]) ] = (zs[0][0].cpu().data.numpy()[0], zs[1][0].cpu().data.numpy()[0])
+                    pose_sample = torch.cat(
+                        [torch.zeros(pose_sample.size(0), pose_sample.size(1), 3).cuda(), pose_sample], dim=2)
+                quants['-'.join([str(jj) for jj in ii])] = (
+                    zs[0][0].cpu().data.numpy()[0], zs[1][0].cpu().data.numpy()[0])
 
                 if False:
                     global_vel = pose_sample[:, :, :3]
                     pose_sample[:, 0, :3] = 0
                     for iii in range(1, pose_sample.size(1)):
-                        pose_sample[:, iii, :3] = pose_sample[:, iii-1, :3] + global_vel[:, iii-1, :]
+                        pose_sample[:, iii, :3] = pose_sample[:, iii - 1, :3] + global_vel[:, iii - 1, :]
 
                 results.append(pose_sample)
         else:
             names = ['rand_seq_' + str(ii) for ii in range(10)]
             for ii in range(10):
-                zs = [torch.randint(0, self.config.structure.l_bins, size=(1, self.config.sample_code_length), device='cuda')]
+                zs = [torch.randint(0, self.config.structure.l_bins, size=(1, self.config.sample_code_length),
+                                    device='cuda')]
                 pose_sample = model.module.decode(zs)
                 if config.rotmat:
-                    pose_sample = torch.cat([torch.zeros(pose_sample.size(0), pose_sample.size(1), 3).cuda(), pose_sample], dim=2)
+                    pose_sample = torch.cat(
+                        [torch.zeros(pose_sample.size(0), pose_sample.size(1), 3).cuda(), pose_sample], dim=2)
                 quants[str(ii)] = zs[0].cpu().data.numpy()[0]
                 quants['rand_seq_' + str(ii)] = (zs[0].cpu().data.numpy()[0], zs[0].cpu().data.numpy()[0])
 
@@ -419,67 +439,85 @@ class MoQ():
                     global_vel = pose_sample[:, :, :3]
                     pose_sample[:, 0, :3] = 0
                     for iii in range(1, pose_sample.size(1)):
-                        pose_sample[:, iii, :3] = pose_sample[:, iii-1, :3] + global_vel[:, iii-1, :]
-                        
+                        pose_sample[:, iii, :3] = pose_sample[:, iii - 1, :3] + global_vel[:, iii - 1, :]
+
                 results.append(pose_sample)
         visualizeAndWrite(results, config, self.sampledir, names, epoch_tested, quants)
-
-
-
 
     def _build(self):
         config = self.config
         self.start_epoch = 0
         self._dir_setting()
+
+        print("build training model...")
         self._build_model()
-        if not(hasattr(config, 'need_not_train_data') and config.need_not_train_data):
+
+        if not (hasattr(config, 'need_not_train_data') and config.need_not_train_data):
+            print("train dataset loading...")
             self._build_train_loader()
-        if not(hasattr(config, 'need_not_test_data') and config.need_not_train_data):      
+            print("train dataset load success!")
+        if not (hasattr(config, 'need_not_test_data') and config.need_not_train_data):
+            print("Test dataset loading...")
             self._build_test_loader()
+            print("Test dataset load success!")
         self._build_optimizer()
 
     def _build_model(self):
         """ Define Model """
-        config = self.config 
+        config = self.config
         if hasattr(config.structure, 'name'):
-            print(f'using {config.structure.name}')
+            print(f'Define {config.structure.name} model')
             model_class = getattr(models, config.structure.name)
+
             model = model_class(config.structure)
+
         else:
             raise NotImplementedError("Wrong Model Selection")
-        
+
         model = nn.DataParallel(model)
         self.model = model.cuda()
 
     def _build_train_loader(self):
+        """
+        Create the data set required for vqvae model training and perform data loader.
+
+        the author use other dataset without aist++ but not marked clearly.
+
+        Returns: self.training_data which is storage the train data set in pytorch.
+        """
 
         data = self.config.data
         if data.name == "aist":
-            print ("train with AIST++ dataset!")
+            print("train with AIST++ dataset!")
             train_music_data, train_dance_data, _ = load_data_aist(
-                data.train_dir, interval=data.seq_len, move=self.config.move_train if hasattr(self.config, 'move_train') else 64, rotmat=self.config.rotmat)
+                data.train_dir, interval=data.seq_len,
+                move=self.config.move_train if hasattr(self.config, 'move_train') else 64, rotmat=self.config.rotmat)
         else:
             train_music_data, train_dance_data = load_data(
-                args_train.train_dir, 
+                # args_train.train_dir,
+                data_dir=data.train_dir,
                 interval=data.seq_len,
                 data_type=data.data_type)
         self.training_data = prepare_dataloader(train_music_data, train_dance_data, self.config.batch_size)
 
-
-
     def _build_test_loader(self):
+        """
+        Create the test data set required for vqvae model training and perform data loader with aist++ dataset.
+        Returns: self.test_loader and self.dance_names which is storage the test data set in pytorch.
+
+        """
         config = self.config
         data = self.config.data
         if data.name == "aist":
-            print ("test with AIST++ dataset!")
+            print("test with AIST++ dataset!")
             music_data, dance_data, dance_names = load_test_data_aist(
                 data.test_dir, move=config.ds_rate, rotmat=config.rotmat)
-        
-        else:    
+
+        else:
             music_data, dance_data, dance_names = load_test_data(
                 data.test_dir, interval=None)
 
-        #pdb.set_trace()
+        # pdb.set_trace()
 
         self.test_loader = torch.utils.data.DataLoader(
             MoSeq(dance_data),
@@ -488,11 +526,11 @@ class MoQ():
             # collate_fn=paired_collate_fn,
         )
         self.dance_names = dance_names
-        #pdb.set_trace()
-        #self.training_data = self.test_loader
+        # pdb.set_trace()
+        # self.training_data = self.test_loader
 
     def _build_optimizer(self):
-        #model = nn.DataParallel(model).to(device)
+        # model = nn.DataParallel(model).to(device)
         config = self.config.optimizer
         try:
             optim = getattr(torch.optim, config.type)
@@ -500,8 +538,8 @@ class MoQ():
             raise NotImplementedError('not implemented optim method ' + config.type)
 
         self.optimizer = optim(itertools.chain(self.model.module.parameters(),
-                                             ),
-                                             **config.kwargs)
+                                               ),
+                               **config.kwargs)
         self.schedular = torch.optim.lr_scheduler.MultiStepLR(self.optimizer, **config.schedular_kwargs)
 
     def _dir_setting(self):
@@ -532,7 +570,7 @@ class MoQ():
         self.videodir = os.path.join(self.visdir, "videos")  # -- imgs, videos, jsons
         if not os.path.exists(self.videodir):
             os.mkdir(self.videodir)
-        
+
         self.ckptdir = os.path.join(self.expdir, "ckpt")
         if not os.path.exists(self.ckptdir):
             os.mkdir(self.ckptdir)
@@ -570,8 +608,6 @@ class MoQ():
         #     os.mkdir(self.ckptdir)
 
 
-
-        
 # def prepare_dataloader(music_data, dance_data, batch_size):
 #     data_loader = torch.utils.data.DataLoader(
 #         MoSeq(dance_data),
@@ -590,18 +626,10 @@ def prepare_dataloader(music_data, dance_data, batch_size):
         batch_size=batch_size,
         sampler=sampler,
         pin_memory=True
-                # collate_fn=paired_collate_fn,
+        # collate_fn=paired_collate_fn,
     )
 
     return data_loader
-
-
-
-
-
-
-
-
 
 # def train_m2d(cfg):
 #     """ Main function """
@@ -654,13 +682,5 @@ def prepare_dataloader(music_data, dance_data, batch_size):
 #     args.d_model = args.frame_emb_size
 
 
-
-
 #     args_data = args.data
 #     args_structure = args.structure
-
-
-
- 
-
-

@@ -94,3 +94,5 @@ sample_code_rate: 8
 init_weight: 'experiments/sep_vqvae/ckpt/epoch_500.pt'
 
 analysis_pair: [[73, 346], [440, 102]]
+
+#need_not_train_data: True

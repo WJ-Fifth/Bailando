@@ -109,7 +109,7 @@ expname: cc_motion_gpt
 
 
 need_not_train_data: True
-epoch: 500
+epoch: 400
 batch_size: 32
 # demo: True
 save_per_epochs: 20

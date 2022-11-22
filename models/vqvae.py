@@ -1,22 +1,27 @@
 import numpy as np
-import torch as t
+import torch
 import torch.nn as nn
 
 from .encdec import Encoder, Decoder, assert_shape
 from .bottleneck import NoBottleneck, Bottleneck
 from .utils.logger import average_metrics
+
+
 # from .utils.audio_utils import  audio_postprocess
 
 def dont_update(params):
     for param in params:
         param.requires_grad = False
 
+
 def update(params):
     for param in params:
         param.requires_grad = True
 
+
 def calculate_strides(strides, downs):
     return [stride ** down for stride, down in zip(strides, downs)]
+
 
 # def _loss_fn(loss_fn, x_target, x_pred, hps):
 #     if loss_fn == 'l1':
@@ -39,7 +44,8 @@ def calculate_strides(strides, downs):
 #     else:
 #         assert False, f"Unknown loss_fn {loss_fn}"
 def _loss_fn(x_target, x_pred):
-    return t.mean(t.abs(x_pred - x_target)) 
+    return torch.mean(torch.abs(x_pred - x_target))
+
 
 class VQVAE(nn.Module):
     def __init__(self, hps, input_dim=72):
@@ -56,18 +62,17 @@ class VQVAE(nn.Module):
         commit = hps.commit
         # spectral = hps.spectral
         # multispectral = hps.multispectral
-        multipliers = hps.hvqvae_multipliers 
+        multipliers = hps.hvqvae_multipliers
         use_bottleneck = hps.use_bottleneck
-        if use_bottleneck:
-            print('We use bottleneck!')
-        else:
-            print('We do not use bottleneck!')
+        # if use_bottleneck:
+        #     print('We use bottleneck!')
+        # else:
+        #     print('We do not use bottleneck!')
         if not hasattr(hps, 'dilation_cycle'):
             hps.dilation_cycle = None
-        block_kwargs = dict(width=hps.width, depth=hps.depth, m_conv=hps.m_conv, \
-                        dilation_growth_rate=hps.dilation_growth_rate, \
-                        dilation_cycle=hps.dilation_cycle, \
-                        reverse_decoder_dilation=hps.vqvae_reverse_decoder_dilation)
+        block_kwargs = dict(width=hps.width, depth=hps.depth, m_conv=hps.m_conv,
+                            dilation_growth_rate=hps.dilation_growth_rate, dilation_cycle=hps.dilation_cycle,
+                            reverse_decoder_dilation=hps.vqvae_reverse_decoder_dilation)
 
         self.sample_length = input_shape[0]
         x_shape, x_channels = input_shape[:-1], input_shape[-1]
@@ -83,6 +88,7 @@ class VQVAE(nn.Module):
         else:
             assert len(multipliers) == levels, "Invalid number of multipliers"
             self.multipliers = multipliers
+
         def _block_kwargs(level):
             this_block_kwargs = dict(block_kwargs)
             this_block_kwargs["width"] *= self.multipliers[level]
@@ -90,9 +96,9 @@ class VQVAE(nn.Module):
             return this_block_kwargs
 
         encoder = lambda level: Encoder(x_channels, emb_width, level + 1,
-                                        downs_t[:level+1], strides_t[:level+1], **_block_kwargs(level))
+                                        downs_t[:level + 1], strides_t[:level + 1], **_block_kwargs(level))
         decoder = lambda level: Decoder(x_channels, emb_width, level + 1,
-                                        downs_t[:level+1], strides_t[:level+1], **_block_kwargs(level))
+                                        downs_t[:level + 1], strides_t[:level + 1], **_block_kwargs(level))
         self.encoders = nn.ModuleList()
         self.decoders = nn.ModuleList()
         for level in range(levels):
@@ -111,20 +117,20 @@ class VQVAE(nn.Module):
         self.reg = hps.reg if hasattr(hps, 'reg') else 0
         self.acc = hps.acc if hasattr(hps, 'acc') else 0
         self.vel = hps.vel if hasattr(hps, 'vel') else 0
-        if self.reg is 0:
-            print('No motion regularization!')
+        # if self.reg is 0:
+        #     print('No motion regularization!')
         # self.spectral = spectral
         # self.multispectral = multispectral
 
     def preprocess(self, x):
         # x: NTC [-1,1] -> NCT [-1,1]
         assert len(x.shape) == 3
-        x = x.permute(0,2,1).float()
+        x = x.permute(0, 2, 1).float()
         return x
 
     def postprocess(self, x):
         # x: NTC [-1,1] <- NCT [-1,1]
-        x = x.permute(0,2,1)
+        x = x.permute(0, 2, 1)
         return x
 
     def _decode(self, zs, start_level=0, end_level=None):
@@ -142,13 +148,13 @@ class VQVAE(nn.Module):
         return x_out
 
     def decode(self, zs, start_level=0, end_level=None, bs_chunks=1):
-        z_chunks = [t.chunk(z, bs_chunks, dim=0) for z in zs]
+        z_chunks = [torch.chunk(z, bs_chunks, dim=0) for z in zs]
         x_outs = []
         for i in range(bs_chunks):
             zs_i = [z_chunk[i] for z_chunk in z_chunks]
             x_out = self._decode(zs_i, start_level=start_level, end_level=end_level)
             x_outs.append(x_out)
-        return t.cat(x_outs, dim=0)
+        return torch.cat(x_outs, dim=0)
 
     def _encode(self, x, start_level=0, end_level=None):
         # Encode
@@ -164,23 +170,22 @@ class VQVAE(nn.Module):
         return zs[start_level:end_level]
 
     def encode(self, x, start_level=0, end_level=None, bs_chunks=1):
-        x_chunks = t.chunk(x, bs_chunks, dim=0)
+        x_chunks = torch.chunk(x, bs_chunks, dim=0)
         zs_list = []
         for x_i in x_chunks:
             zs_i = self._encode(x_i, start_level=start_level, end_level=end_level)
             zs_list.append(zs_i)
-        zs = [t.cat(zs_level_list, dim=0) for zs_level_list in zip(*zs_list)]
+        zs = [torch.cat(zs_level_list, dim=0) for zs_level_list in zip(*zs_list)]
         return zs
 
     def sample(self, n_samples):
-        zs = [t.randint(0, self.l_bins, size=(n_samples, *z_shape), device='cuda') for z_shape in self.z_shapes]
+        zs = [torch.randint(0, self.l_bins, size=(n_samples, *z_shape), device='cuda') for z_shape in self.z_shapes]
         return self.decode(zs)
 
     def forward(self, x):
         metrics = {}
 
         N = x.shape[0]
-
         # Encode/Decode
         x_in = self.preprocess(x)
         xs = []
@@ -191,9 +196,10 @@ class VQVAE(nn.Module):
 
         zs, xs_quantised, commit_losses, quantiser_metrics = self.bottleneck(xs)
         x_outs = []
+
         for level in range(self.levels):
             decoder = self.decoders[level]
-            x_out = decoder(xs_quantised[level:level+1], all_levels=False)
+            x_out = decoder(xs_quantised[level:level + 1], all_levels=False)
             assert_shape(x_out, x_in.shape)
             x_outs.append(x_out)
 
@@ -205,16 +211,16 @@ class VQVAE(nn.Module):
         #         sl = spectral_convergence(x_target, x_out, self.hps)
         #     sl = t.mean(sl)
         #     return sl
-
+        #
         # def _multispectral_loss(x_target, x_out, self.hps):
         #     sl = multispectral_loss(x_target, x_out, self.hps) / hps.bandwidth['spec']
         #     sl = t.mean(sl)
         #     return sl
 
-        recons_loss = t.zeros(()).to(x.device)
-        regularization = t.zeros(()).to(x.device)
-        velocity_loss = t.zeros(()).to(x.device)
-        acceleration_loss = t.zeros(()).to(x.device)
+        recons_loss = torch.zeros(()).to(x.device)
+        regularization = torch.zeros(()).to(x.device)
+        velocity_loss = torch.zeros(()).to(x.device)
+        acceleration_loss = torch.zeros(()).to(x.device)
         # spec_loss = t.zeros(()).to(x.device)
         # multispec_loss = t.zeros(()).to(x.device)
         # x_target = audio_postprocess(x.float(), self.hps)
@@ -222,8 +228,8 @@ class VQVAE(nn.Module):
 
         for level in reversed(range(self.levels)):
             x_out = self.postprocess(x_outs[level])
+
             # x_out = audio_postprocess(x_out, self.hps)
-            
 
             # this_recons_loss = _loss_fn(loss_fn, x_target, x_out, hps)
             this_recons_loss = _loss_fn(x_target, x_out)
@@ -235,20 +241,26 @@ class VQVAE(nn.Module):
             recons_loss += this_recons_loss
             # spec_loss += this_spec_loss
             # multispec_loss += this_multispec_loss
-            regularization += t.mean((x_out[:, 2:] + x_out[:, :-2] - 2 * x_out[:, 1:-1])**2)
 
-            velocity_loss +=  _loss_fn( x_out[:, 1:] - x_out[:, :-1], x_target[:, 1:] - x_target[:, :-1])
-            acceleration_loss +=  _loss_fn(x_out[:, 2:] + x_out[:, :-2] - 2 * x_out[:, 1:-1], x_target[:, 2:] + x_target[:, :-2] - 2 * x_target[:, 1:-1])
+            # 范围，e的范围是0：28,e_q的范围是1：29. 存在疑虑？
+            regularization += torch.mean((x_out[:, 2:] + x_out[:, :-2] - 2 * x_out[:, 1:-1]) ** 2)
+
+            # The global velocity decoder branch L_rec
+            velocity_loss += _loss_fn(x_out[:, 1:] - x_out[:, :-1], x_target[:, 1:] - x_target[:, :-1])
+            acceleration_loss += _loss_fn(x_out[:, 2:] + x_out[:, :-2] - 2 * x_out[:, 1:-1],
+                                          x_target[:, 2:] + x_target[:, :-2] - 2 * x_target[:, 1:-1])
         # if not hasattr(self.)
         commit_loss = sum(commit_losses)
-        # loss = recons_loss + self.spectral * spec_loss + self.multispectral * multispec_loss + self.commit * commit_loss
-        loss = recons_loss +  commit_loss * self.commit + self.reg * regularization + self.vel * velocity_loss + self.acc * acceleration_loss
+        # loss = recons_loss + self.spectral * spec_loss + self.multispectral * multispec_loss + self.commit *
+        # commit_loss
+        loss = recons_loss + commit_loss * self.commit + \
+               self.reg * regularization + self.vel * velocity_loss + self.acc * acceleration_loss
 
-        with t.no_grad():
+        with torch.no_grad():
             # sc = t.mean(spectral_convergence(x_target, x_out, hps))
             # l2_loss = _loss_fn("l2", x_target, x_out, hps)
             l1_loss = _loss_fn(x_target, x_out)
-            
+
             # linf_loss = _loss_fn("linf", x_target, x_out, hps)
 
         quantiser_metrics = average_metrics(quantiser_metrics)
