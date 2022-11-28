@@ -1,4 +1,4 @@
-from mc_gpt_all import MCTall
+from gpt_new import GPT_CALL
 import argparse
 import os
 import yaml
@@ -29,26 +29,16 @@ def main():
 
     for k, v in vars(args).items():
         config[k] = v
-    pprint(config)
+    # pprint(config)
 
     config = EasyDict(config)
-    agent = MCTall(config)
+    agent = GPT_CALL(config)
     # print(config)
 
     if args.train:
         agent.train()
     elif args.eval:
         agent.eval()
-    elif args.visgt:
-        # print('Wula!')
-        agent.visgt()
-    elif args.anl:
-        # print('Wula!')
-        agent.analyze_code()
-    elif args.sample:
-        config.update({'need_not_train_data': True})
-        config.update({'need_not_test_data': True})
-        agent.sample()
 
 
 if __name__ == '__main__':

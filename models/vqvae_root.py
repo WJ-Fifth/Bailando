@@ -1,5 +1,5 @@
 import numpy as np
-import torch as t
+import torch
 import torch.nn as nn
 
 from .encdec import Encoder, Decoder, assert_shape
@@ -44,7 +44,7 @@ def calculate_strides(strides, downs):
 #     else:
 #         assert False, f"Unknown loss_fn {loss_fn}"
 def _loss_fn(x_target, x_pred):
-    return t.mean(t.abs(x_pred - x_target))
+    return torch.mean(torch.abs(x_pred - x_target))
 
 
 class VQVAER(nn.Module):
@@ -64,10 +64,12 @@ class VQVAER(nn.Module):
         # multispectral = hps.multispectral
         multipliers = hps.hvqvae_multipliers
         use_bottleneck = hps.use_bottleneck
-        if use_bottleneck:
-            print('We use bottleneck!')
-        else:
-            print('We do not use bottleneck!')
+
+        # if use_bottleneck:
+        #     print('We use bottleneck!')
+        # else:
+        #     print('We do not use bottleneck!')
+
         if not hasattr(hps, 'dilation_cycle'):
             hps.dilation_cycle = None
         block_kwargs = dict(width=hps.width, depth=hps.depth, m_conv=hps.m_conv,
@@ -121,7 +123,7 @@ class VQVAER(nn.Module):
         self.reg = hps.reg if hasattr(hps, 'reg') else 0
         self.acc = hps.acc if hasattr(hps, 'acc') else 0
         self.vel = hps.vel if hasattr(hps, 'vel') else 0
-        if self.reg is 0:
+        if self.reg == 0:
             print('No motion regularization!')
         # self.spectral = spectral
         # self.multispectral = multispectral
@@ -159,19 +161,20 @@ class VQVAER(nn.Module):
         return x_out
 
     def decode(self, zs, start_level=0, end_level=None, bs_chunks=1):
-        z_chunks = [t.chunk(z, bs_chunks, dim=0) for z in zs]
+        z_chunks = [torch.chunk(z, bs_chunks, dim=0) for z in zs]
         x_outs = []
         for i in range(bs_chunks):
             zs_i = [z_chunk[i] for z_chunk in z_chunks]
             x_out = self._decode(zs_i, start_level=start_level, end_level=end_level)
             x_outs.append(x_out)
-        return t.cat(x_outs, dim=0)
+        return torch.cat(x_outs, dim=0)
 
     def _encode(self, x, start_level=0, end_level=None):
         # Encode
         if end_level is None:
             end_level = self.levels
         x_in = self.preprocess(x)
+        # print(x_in.shape)
         xs = []
         for level in range(self.levels):
             encoder = self.encoders[level]
@@ -182,21 +185,22 @@ class VQVAER(nn.Module):
 
     def encode(self, x, start_level=0, end_level=None, bs_chunks=1):
         x[:, :, :self.hps.joint_channel] = 0
-        x_chunks = t.chunk(x, bs_chunks, dim=0)
+        # print(x.shape)
+        x_chunks = torch.chunk(x, bs_chunks, dim=0)
         zs_list = []
         for x_i in x_chunks:
             zs_i = self._encode(x_i, start_level=start_level, end_level=end_level)
             zs_list.append(zs_i)
-        zs = [t.cat(zs_level_list, dim=0) for zs_level_list in zip(*zs_list)]
+        zs = [torch.cat(zs_level_list, dim=0) for zs_level_list in zip(*zs_list)]
         return zs
 
     def sample(self, n_samples):
-        zs = [t.randint(0, self.l_bins, size=(n_samples, *z_shape), device='cuda') for z_shape in self.z_shapes]
+        zs = [torch.randint(0, self.l_bins, size=(n_samples, *z_shape), device='cuda') for z_shape in self.z_shapes]
         return self.decode(zs)
 
     def forward(self, x):
         self.bottleneck.eval()
-        with t.no_grad():
+        with torch.no_grad():
 
             metrics = {}
 
@@ -227,10 +231,10 @@ class VQVAER(nn.Module):
             x_outs.append(x_out)
             x_outs_vel.append(x_vel_out)
 
-        recons_loss = t.zeros(()).to(x.device)
-        regularization = t.zeros(()).to(x.device)
-        velocity_loss = t.zeros(()).to(x.device)
-        acceleration_loss = t.zeros(()).to(x.device)
+        recons_loss = torch.zeros(()).to(x.device)
+        regularization = torch.zeros(()).to(x.device)
+        velocity_loss = torch.zeros(()).to(x.device)
+        acceleration_loss = torch.zeros(()).to(x.device)
         # spec_loss = t.zeros(()).to(x.device)
         # multispec_loss = t.zeros(()).to(x.device)
         x_target = x.float()[:, :, :self.hps.joint_channel]
@@ -265,7 +269,7 @@ class VQVAER(nn.Module):
         loss = recons_loss + self.acc * acceleration_loss
         # +  commit_loss * self.commit + self.reg * regularization + self.vel * velocity_loss + self.acc * acceleration_loss
 
-        with t.no_grad():
+        with torch.no_grad():
             # sc = t.mean(spectral_convergence(x_target, x_out, hps))
             # l2_loss = _loss_fn("l2", x_target, x_out, hps)
             l1_loss = _loss_fn(x_target, x_out_vel)

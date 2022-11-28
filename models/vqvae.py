@@ -167,6 +167,7 @@ class VQVAE(nn.Module):
             x_out = encoder(x_in)
             xs.append(x_out[-1])
         zs = self.bottleneck.encode(xs)
+
         return zs[start_level:end_level]
 
     def encode(self, x, start_level=0, end_level=None, bs_chunks=1):

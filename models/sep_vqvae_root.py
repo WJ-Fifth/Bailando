@@ -81,6 +81,7 @@ class SepVQVAER(nn.Module):
         b, t, c = x.size()
         zup = self.vqvae_up.encode(x.view(b, t, c // self.chanel_num, self.chanel_num)[:, :, smpl_up].view(b, t, -1),
                                    start_level, end_level, bs_chunks)
+
         zdown = self.vqvae_down.encode(
             x.view(b, t, c // self.chanel_num, self.chanel_num)[:, :, smpl_down].view(b, t, -1), start_level, end_level,
             bs_chunks)

@@ -12,8 +12,10 @@ from .sep_vqvae_root import SepVQVAER
 from .up_down_half_reward import UpDownReward
 #from .critic_transformer import CriticTransformer
 from .cross_cond_gpt2 import CrossCondGPT2
+from .gpt_model_new import GPT_Model
 from .cross_cond_gpt2_ac import CrossCondGPT2AC
-#from .cross_cond_gpt3 import CrossCondGPT3
-#from .cross_cond_gpt2_music_window import CrossCondGPT2MW
-#__all__ = ['VQVAE', 'condGPT', 'condGPT2', 'condGPT3', 'CrossCondGPT4', 'SepVQVAE', 'SepCondGPT', 'SepCondGPT2', 'CrossCondGPT', 'UpDownReward', 'CriticTransformer', 'CrossCondGPT2', 'CrossCondGPT3', 'CrossCondGPT2AC', 'CrossCondGPT2MW']
-__all__ = ['SepVQVAE', 'SepVQVAER', 'UpDownReward', 'CrossCondGPT2', 'CrossCondGPT2AC']
+# from .cross_cond_gpt3 import CrossCondGPT3 from .cross_cond_gpt2_music_window import CrossCondGPT2MW __all__ = [
+# 'VQVAE', 'condGPT', 'condGPT2', 'condGPT3', 'CrossCondGPT4', 'SepVQVAE', 'SepCondGPT', 'SepCondGPT2',
+# 'CrossCondGPT', 'UpDownReward', 'CriticTransformer', 'CrossCondGPT2', 'CrossCondGPT3', 'CrossCondGPT2AC',
+# 'CrossCondGPT2MW']
+__all__ = ['SepVQVAE', 'SepVQVAER', 'UpDownReward', 'CrossCondGPT2', 'CrossCondGPT2AC', 'GPT_Model']

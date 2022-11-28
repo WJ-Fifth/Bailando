@@ -50,9 +50,9 @@ structure:
     
     
 structure_generate:
-    name: CrossCondGPT2
+    name: GPT_Model
     #ChoreoGrapher Configs
-    block_size: 29
+    ckpt_epoch: 29
     base:
         embd_pdrop: 0.1
         resid_pdrop: 0.1
@@ -78,7 +78,7 @@ structure_generate:
         vocab_size_down: 512 
     n_music: 438
     n_music_emb: 768
-    # XXX Configs
+    block_size: 29
 
 loss_weight:
     mse_weight: 1
@@ -101,14 +101,16 @@ data:
 testing:
     height: 540
     width: 960
-    ckpt_epoch: 400
+    ckpt_epoch: 20
 
 
 vqvae_weight: 'experiments/sep_vqvae_root/ckpt/epoch_500.pt'
-expname: cc_motion_gpt
+expname: motion_gpt_new
 
 
-#need_not_train_data: True
+need_not_train_data: True
+#need_not_test_data: True
+
 epoch: 400
 batch_size: 32
 # demo: True
@@ -121,7 +123,7 @@ cuda: True
 global_vel: True
 ds_rate: 8
 move: 8
-external_wav: data/aistpp_music_feat_7.5fps
+#external_wav: data/aistpp_music_feat_7.5fps
 external_wav_rate: 1
 # random_init_test: True
 music_normalize: False

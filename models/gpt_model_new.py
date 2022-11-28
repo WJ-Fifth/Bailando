@@ -13,61 +13,38 @@ import logging
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+from .resnet import Resnet1D
 
 
-# from .gpt3p import condGPT3Part
-# logger = logging.getLogger(__name__)
-
-
-class CrossCondGPT2(nn.Module):
+class GPT_Model(nn.Module):
     """  the full GPT language model, with a context size of block_size """
 
     def __init__(self, config):
         super().__init__()
+        self.music_downsample = MusicDownSample(config)
         self.gpt_base = CrossCondGPTBase(config.base)
         self.gpt_head = CrossCondGPTHead(config.head)
-        # self.down_half_gpt = CrossCondGPTHead(config.down_half_gpt)
-        # if hasattr(config, 'critic_net'):
-        #     self.critic_net = CrossCondGPTHead(config.critic_net)
         self.block_size = config.block_size
 
-    #     # logger.info("number of parameters: %e", sum(p.numel() for p in self.parameters()))
-
-    # def get_block_size(self):
-    #     return self.block_size
-
-    # def _init_weights(self, module):
-    #     if isinstance(module, (nn.Linear, nn.Embedding)):
-    #         module.weight.data.normal_(mean=0.0, std=0.02)
-    #         if isinstance(module, nn.Linear) and module.bias is not None:
-    #             module.bias.data.zero_()
-    #     elif isinstance(module, nn.LayerNorm):
-    #         module.bias.data.zero_()
-    #         module.weight.data.fill_(1.0)
     def get_block_size(self):
         return self.block_size
 
-    # def sample(self, xs, cond):
-    #     x_up, x_down = xs
-    #     return (self.up_half_gpt.sample(x_up, cond), self.down_half_gpt.sample(x_down, cond))
     def sample(self, xs, cond, shift=None):
-
         block_size = self.get_block_size() - 1
         if shift is not None:
             block_shift = min(shift, block_size)
         else:
             block_shift = block_size
         x_up, x_down = xs
-        for k in range(cond.size(1)):
+
+        for k in range(cond.size(1)//8):
             x_cond_up = x_up if x_up.size(1) <= block_size else x_up[:, -(
                         block_shift + (k - block_size - 1) % (block_size - block_shift + 1)):]
             x_cond_down = x_down if x_down.size(1) <= block_size else x_down[:, -(
                         block_shift + (k - block_size - 1) % (block_size - block_shift + 1)):]  # crop context if needed
 
-            cond_input = cond[:, :k + 1] if k < block_size else cond[:, k - (
-                        block_shift + (k - block_size - 1) % (block_size - block_shift + 1)) + 1:k + 1]
-            print(cond_input.size())
-
+            cond_input = cond[:, :(k+1) * 8] if k < block_size else cond[:, (k - (
+                        block_shift + (k - block_size - 1) % (block_size - block_shift + 1)) + 1) * 8 : (k + 1) * 8]
             logits, _ = self.forward((x_cond_up, x_cond_down), cond_input)
             # jj += 1
             # pluck the logits at the final step and scale by temperature
@@ -84,17 +61,21 @@ class CrossCondGPT2(nn.Module):
             # append to the sequence and continue
             x_up = torch.cat((x_up, ix_up), dim=1)
             x_down = torch.cat((x_down, ix_down), dim=1)
-        exit()
+
         return ([x_up], [x_down])
 
     def forward(self, idxs, cond, targets=None):
         idx_up, idx_down = idxs
-
         targets_up, targets_down = None, None
         if targets is not None:
             targets_up, targets_down = targets
-
-        feat = self.gpt_base(idx_up, idx_down, cond)
+        music_feature = self.music_downsample(cond)
+        if music_feature.shape[0] > 1:
+            input_music_feature = music_feature[:, 1:]
+        else:
+            input_music_feature = music_feature
+            # print(input_music_feature.shape)
+        feat = self.gpt_base(idx_up, idx_down, input_music_feature)
         logits_up, logits_down, loss_up, loss_down = self.gpt_head(feat, targets)
         # logits_down, loss_down = self.down_half_gpt(feat, targets_down)
 
@@ -104,6 +85,53 @@ class CrossCondGPT2(nn.Module):
             loss = None
 
         return (logits_up, logits_down), loss
+
+
+class MusicDownSample(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+
+        input_channel = 438
+        output_channel = 438
+        down_rate = 3
+        stride = 2
+        width = 512
+        depth = 3
+        m_conv = 1.0
+
+        blocks = []
+
+        for i in range(down_rate):
+            block = nn.Sequential(
+                nn.Conv1d(in_channels=input_channel if i == 0 else width, out_channels=width, kernel_size=3,
+                          stride=2, padding=1),
+                Resnet1D(n_in=width, n_depth=depth, m_conv=m_conv,
+                         dilation_growth_rate=1, dilation_cycle=None, zero_out=False, res_scale=False),
+            )
+            blocks.append(block)
+        block = nn.Conv1d(in_channels=width, out_channels=output_channel, kernel_size=3, stride=1, padding=1)
+        blocks.append(block)
+
+        self.model = nn.Sequential(*blocks)
+
+    def forward(self, x):
+
+        x_in = self.preprocess(x)
+        x_out = self.model(x_in)
+        x_out = self.postprocess(x_out)
+
+        return x_out
+
+    def preprocess(self, x):
+        # x: NTC [-1,1] -> NCT [-1,1]
+        assert len(x.shape) == 3
+        x = x.permute(0, 2, 1).float()
+        return x
+
+    def postprocess(self, x):
+        # x: NTC [-1,1] <- NCT [-1,1]
+        x = x.permute(0, 2, 1)
+        return x
 
 
 class CausalCrossConditionalSelfAttention(nn.Module):
@@ -281,7 +309,6 @@ class CrossCondGPTBase(nn.Module):
         x = self.drop(token_embeddings + position_embeddings)
 
         x = self.blocks(x)
-        # x = self.ln_f(x)
 
         return x
 
