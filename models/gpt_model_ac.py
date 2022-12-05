@@ -16,38 +16,44 @@ from torch.nn import functional as F
 from .resnet import Resnet1D
 
 
-class GPT_Model(nn.Module):
+class Actor_GPT_Model(nn.Module):
     """  the full GPT language model, with a context size of block_size """
 
     def __init__(self, config):
         super().__init__()
-        self.music_downsample = MusicDownSample(config)
         self.gpt_base = CrossCondGPTBase(config.base)
         self.gpt_head = CrossCondGPTHead(config.head)
+        self.critic_net = CrossCondGPTHead(config.critic_net)
         self.block_size = config.block_size
 
     def get_block_size(self):
         return self.block_size
 
+    def freeze_drop(self):
+        for model in self.modules():
+            if isinstance(model, nn.Dropout):
+                model.eval()
+                model.requires_grad = False
+
     def sample(self, xs, cond, shift=None):
+        shift = None
         block_size = self.get_block_size() - 1
         if shift is not None:
             block_shift = min(shift, block_size)
         else:
             block_shift = block_size
         x_up, x_down = xs
-
-        for k in range(cond.size(1)//8):
+        for k in range(cond.size(1)):
             x_cond_up = x_up if x_up.size(1) <= block_size else x_up[:, -(
-                        block_shift + (k - block_size - 1) % (block_size - block_shift + 1)):]
+                    block_shift + (k - block_size - 1) % (block_size - block_shift + 1)):]
             x_cond_down = x_down if x_down.size(1) <= block_size else x_down[:, -(
-                        block_shift + (k - block_size - 1) % (block_size - block_shift + 1)):]  # crop context if needed
+                    block_shift + (k - block_size - 1) % (block_size - block_shift + 1)):]  # crop context if needed
 
-            cond_input = cond[:, :(k+1) * 8] if k < block_size else cond[:, (k - (
-                        block_shift + (k - block_size - 1) % (block_size - block_shift + 1)) + 1) * 8 : (k + 1) * 8]
+            cond_input = cond[:, :k + 1] if k < block_size else cond[:, k - (
+                    block_shift + (k - block_size - 1) % (block_size - block_shift + 1)) + 1:k + 1]
+
             logits, _ = self.forward((x_cond_up, x_cond_down), cond_input)
-            # jj += 1
-            # pluck the logits at the final step and scale by temperature
+
             logit_up, logit_down = logits
             logit_up = logit_up[:, -1, :]
             logit_down = logit_down[:, -1, :]
@@ -66,6 +72,7 @@ class GPT_Model(nn.Module):
 
     def forward(self, idxs, cond, targets=None):
         idx_up, idx_down = idxs
+
         targets_up, targets_down = None, None
         if targets is not None:
             targets_up, targets_down = targets
@@ -76,9 +83,8 @@ class GPT_Model(nn.Module):
         else:
             input_music_feature = music_feature
 
-        feat = self.gpt_base(idx_up, idx_down, input_music_feature)
-        logits_up, logits_down, loss_up, loss_down = self.gpt_head(feat, targets)
-        # logits_down, loss_down = self.down_half_gpt(feat, targets_down)
+        feat = self.gpt_base(idx_up, idx_down, music_feature)
+        logits_up, logits_down, loss_up, loss_down, entropy_up, entropy_down = self.gpt_head(feat, targets)
 
         if loss_up is not None and loss_down is not None:
             loss = loss_up + loss_down
@@ -86,6 +92,39 @@ class GPT_Model(nn.Module):
             loss = None
 
         return (logits_up, logits_down), loss
+
+    def critic(self, idxs, cond):
+        idx_up, idx_down = idxs
+        with torch.no_grad():
+            self.gpt_base.eval()
+            state = self.gpt_base(idx_up, idx_down, cond)
+            self.gpt_base.train()
+        values_up, values_down, _, _, _, _ = self.critic_net(state)
+        value = values_up + values_down  # up + down
+        return value  # value: NxTx1
+
+    def actor(self, idxs, cond, targets=None, reduction=False):
+        idx_up, idx_down = idxs
+        # print(idxs[0][0])
+        # print(targets[0])
+
+        targets_up, targets_down = None, None
+        if targets is not None:
+            targets_up, targets_down = targets
+
+        with torch.no_grad():
+            self.gpt_base.eval()
+            feat = self.gpt_base(idx_up, idx_down, cond)
+            self.gpt_base.train()
+
+        logits_up, logits_down, loss_up, loss_down, entropy_up, entropy_down = self.gpt_head(feat, targets)
+
+        if loss_up is not None and loss_down is not None:
+            loss = loss_up + loss_down
+        else:
+            loss = None
+
+        return (logits_up, logits_down), loss, entropy_up + entropy_down
 
 
 class MusicDownSample(nn.Module):
@@ -133,7 +172,6 @@ class MusicDownSample(nn.Module):
         # x: NTC [-1,1] <- NCT [-1,1]
         x = x.permute(0, 2, 1)
         return x
-
 
 class CausalCrossConditionalSelfAttention(nn.Module):
     """
@@ -221,12 +259,19 @@ class CrossCondGPTBase(nn.Module):
         self.block_size = config.block_size
 
         self.apply(self._init_weights)
+
     def get_block_size(self):
         return self.block_size
 
+    def freeze_drop(self):
+        for m in self.modules():
+            if isinstance(m, nn.Dropout):
+                m.eval()
+                m.requires_grad = False
+
     def _init_weights(self, module):
         if isinstance(module, (nn.Linear, nn.Embedding)):
-            # module.weight.data.uniform_(math.sqrt(6.0/sum(module.weight.size())))
+            module.weight.data.uniform_(math.sqrt(6.0 / sum(module.weight.size())))
             module.weight.data.normal_(mean=0.0, std=0.02)
             if isinstance(module, nn.Linear) and module.bias is not None:
                 module.bias.data.zero_()
@@ -324,9 +369,16 @@ class CrossCondGPTHead(nn.Module):
     def get_block_size(self):
         return self.block_size
 
+    def freeze_drop(self):
+        for m in self.modules():
+            if isinstance(m, nn.Dropout):
+                m.eval()
+                m.requires_grad = False
+
     def _init_weights(self, module):
         if isinstance(module, (nn.Linear, nn.Embedding)):
-            module.weight.data.normal_(mean=0.0, std=0.02)
+            module.weight.data.uniform_(math.sqrt(6.0 / sum(module.weight.size())))
+            # module.weight.data.normal_(mean=0.0, std=0.02)
             if isinstance(module, nn.Linear) and module.bias is not None:
                 module.bias.data.zero_()
         elif isinstance(module, nn.LayerNorm):
@@ -395,7 +447,14 @@ class CrossCondGPTHead(nn.Module):
         if targets is not None:
             targets_up, targets_down = targets
 
-            loss_up = F.cross_entropy(logits_up.view(-1, logits_up.size(-1)), targets_up.view(-1))
-            loss_down = F.cross_entropy(logits_down.view(-1, logits_down.size(-1)), targets_down.view(-1))
+            loss_up = F.cross_entropy(logits_up.view(-1, logits_up.size(-1)), targets_up.view(-1), reduction='none')
+            loss_down = F.cross_entropy(logits_down.view(-1, logits_down.size(-1)), targets_down.view(-1),
+                                        reduction='none')
 
-        return logits_up, logits_down, loss_up, loss_down
+        logits_up_flat = logits_up.view(-1, logits_up.size(-1))  # NT * C
+        entropy_up = - (F.softmax(logits_up_flat, dim=-1) * F.log_softmax(logits_up_flat, dim=-1)).sum(dim=-1)
+
+        logits_down_flat = logits_down.view(-1, logits_down.size(-1))  # NT * C
+        entropy_down = - (F.softmax(logits_down_flat, dim=-1) * F.log_softmax(logits_down_flat, dim=-1)).sum(dim=-1)
+
+        return logits_up, logits_down, loss_up, loss_down, entropy_up, entropy_down

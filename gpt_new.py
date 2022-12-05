@@ -114,12 +114,12 @@ class GPT_CALL:
                 'epoch': epoch_i
             }
 
-            # # Save checkpoint
-            # if epoch_i % config.save_per_epochs == 0 or epoch_i == 1:
-            #     filename = os.path.join(self.ckptdir, f'epoch_{epoch_i}.pt')
-            #     torch.save(checkpoint, filename)
+            # Save checkpoint
+            if epoch_i % config.save_per_epochs == 0 or epoch_i == 1:
+                filename = os.path.join(self.ckptdir, f'epoch_{epoch_i}.pt')
+                torch.save(checkpoint, filename)
             # Eval
-            if epoch_i % config.test_freq == 0 or epoch_i == 1:
+            if epoch_i % config.test_freq == 0:
                 with torch.no_grad():
                     print("Evaluation...")
                     gpt.eval()

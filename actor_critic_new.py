@@ -25,34 +25,25 @@ import datetime
 warnings.filterwarnings('ignore')
 import json
 import torch.nn.functional as F
-# a, b, c, d = check_data_distribution('/mnt/lustre/lisiyao1/dance/dance2/DanceRevolution/data/aistpp_train')
 
 import matplotlib.pyplot as plt
 
 music_root = None
 
 
-# music_root = '/mnt/lustre/lisiyao1/dance/dance2/DanceRevolution/data/aistpp_test_full_wav'
-
-# beat signal is already stored in the feature, just fetch it (dim 53)
 def get_beat(key, music_root):
-    # if demo:
-    #     music_root_a = '/mnt/lustressd/lisiyao1/data/aistpp_music/aistpp_music_feat_demo'
-    #     # print('Demo!')
-    # else:
     music_root_a = music_root
-    # print('Not Demo!')
     path = os.path.join(music_root_a, key)
     with open(path) as f:
-        # print(path)
         sample_dict = json.loads(f.read())
         beats = np.array(sample_dict['music_array'])[:, 53]
 
         return beats
 
 
-class AC():
+class Actor_Critic:
     def __init__(self, args):
+        self.device = None
         self.config = args
         torch.backends.cudnn.benchmark = True
         self._build()
@@ -95,18 +86,17 @@ class AC():
         # Training Loop
         for epoch_i in range(1, config.epoch + 1):
 
-            # At the very begining, generate the motion as test
+            # At the very beginning, generate the motion as test
             dance_up_seqs = []
             dance_down_seqs = []
             music_seqs = []
             beat_seqs = []
             for batch_i, batch in enumerate(test_loader):
                 if hasattr(config, 'demo') and config.demo:
-                    # print('demo!!')
-                    # ddm = True
+
                     music_seq = batch.to(self.device)
                     x = (
-                    torch.ones(1, 1, ).to(self.device).long() * 423, torch.ones(1, 1, ).to(self.device).long() * 12)
+                        torch.ones(1, 1, ).to(self.device).long() * 423, torch.ones(1, 1, ).to(self.device).long() * 12)
                 else:
                     music_seq, pose_seq = batch
                     music_seq = music_seq.to(self.device)
@@ -114,13 +104,6 @@ class AC():
 
                     pose_seq[:, :, :3] = 0
                     # print(pose_seq.size())
-
-                music_ds_rate = config.ds_rate if not hasattr(config, 'external_wav') else config.external_wav_rate
-                music_seq = music_seq[:, :, :config.structure_generate.n_music // music_ds_rate].contiguous().float()
-                # print(music_seq.size())
-                b, t, c = music_seq.size()
-                music_seq_ori = music_seq.view(b, t // music_ds_rate, c * music_ds_rate)
-
                 # 1. generate motion on whole music (no grad)
                 ##NOTE the generation here should be consistent with the evaluation process (generate whole piece)
                 with torch.no_grad():
@@ -137,8 +120,6 @@ class AC():
                             x = quants_pred[0][:, :1]
 
                     gpt.eval()
-                    # music [1 ... 29], pose [0]
-                    music_seq = music_seq_ori[:, 1:]
                     # print(z.size())
                     zs = gpt.module.sample(x, cond=music_seq)
                     # zs [0, ..., 29]
@@ -149,7 +130,7 @@ class AC():
 
                     dance_up_seqs.append(zs[0][0][0].data.cpu().numpy())
                     dance_down_seqs.append(zs[1][0][0].data.cpu().numpy())
-                    music_seqs.append(music_seq_ori[0].data.cpu().numpy())
+                    music_seqs.append(music_seqs[0].data.cpu().numpy())
                     beat_seqs.append(get_beat(self.dance_names[batch_i], config.rl_music_root))
 
             # 2. sample music-motion pair from generated data
@@ -233,7 +214,7 @@ class AC():
                     output, actor_loss, entropy = gpt.module.actor(quants_actor_input, music_seq[:, :-1],
                                                                    quants_actor_output,
                                                                    reduction=False)  # output dance 1...28
-                    # loss = torch.sum(actor_loss * mask_seq.view(-1).clone().detach()) / torch.sum(mask_seq).clone().detach()
+
                     loss = torch.sum(
                         (actor_loss * td_error.view(-1).clone().detach() - alpha * entropy) * mask_seq.view(
                             -1).clone().detach()) / torch.sum(mask_seq).clone().detach() * config.actor_loss_decay
@@ -308,35 +289,9 @@ class AC():
                         b, t, c = music_seq.size()
                         music_seq = music_seq.view(b, t // music_ds_rate, c * music_ds_rate)
                         music_seq = music_seq[:, 1:]
-                        # print(music_seq.size())
-
-                        # block_size = gpt.module.get_block_size()
 
                         zs = gpt.module.sample(x, cond=music_seq)
-                        # jj = 0
-                        # for k in range(music_seq.size(1)):
-                        #     x_cond = x if x.size(1) <= block_size else x[:, -block_size:] # crop context if needed
-                        #     music_seq_input = music_seq[:, :k+1] if k < block_size else music_seq[:, k-block_size+1:k+1]
-                        #     # print(x_cond.size())
-                        #     # print(music_seq_input.size())
-                        #     logits, _ = gpt(x_cond, music_seq_input)
-                        #     # jj += 1
-                        #     # pluck the logits at the final step and scale by temperature
-                        #     logits = logits[:, -1, :]
-                        #     # optionally crop probabilities to only the top k options
-                        #     # if top_k is not None:
-                        #     #     logits = top_k_logits(logits, top_k)
-                        #     # apply softmax to convert to probabilities
-                        #     probs = F.softmax(logits, dim=-1)
-                        #     # sample from the distribution or take the most likely
-                        #     # if sample:
-                        #     #     ix = torch.multinomial(probs, num_samples=1)
-                        #     # else:
-                        #     _, ix = torch.topk(probs, k=1, dim=-1)
-                        #     # append to the sequence and continue
-                        #     x = torch.cat((x, ix), dim=1)
 
-                        # zs = [x]
                         pose_sample = vqvae.module.decode(zs)
 
                         if config.global_vel:
@@ -388,7 +343,8 @@ class AC():
                 if hasattr(config, 'demo') and config.demo:
                     music_seq = batch_eval.to(self.device)
                     quants = (
-                    [torch.ones(1, 1, ).to(self.device).long() * 423], [torch.ones(1, 1, ).to(self.device).long() * 12])
+                        [torch.ones(1, 1, ).to(self.device).long() * 423],
+                        [torch.ones(1, 1, ).to(self.device).long() * 12])
                 else:
                     music_seq, pose_seq = batch_eval
                     music_seq = music_seq.to(self.device)
@@ -412,30 +368,7 @@ class AC():
                 # block_size = gpt.module.get_block_size()
 
                 zs = gpt.module.sample(x, cond=music_seq)
-                # jj = 0
-                # for k in range(music_seq.size(1)):
-                #     x_cond = x if x.size(1) <= block_size else x[:, -block_size:] # crop context if needed
-                #     music_seq_input = music_seq[:, :k+1] if k < block_size else music_seq[:, k-block_size+1:k+1]
-                #     # print(x_cond.size())
-                #     # print(music_seq_input.size())
-                #     logits, _ = gpt(x_cond, music_seq_input)
-                #     # jj += 1
-                #     # pluck the logits at the final step and scale by temperature
-                #     logits = logits[:, -1, :]
-                #     # optionally crop probabilities to only the top k options
-                #     # if top_k is not None:
-                #     #     logits = top_k_logits(logits, top_k)
-                #     # apply softmax to convert to probabilities
-                #     probs = F.softmax(logits, dim=-1)
-                #     # sample from the distribution or take the most likely
-                #     # if sample:
-                #     #     ix = torch.multinomial(probs, num_samples=1)
-                #     # else:
-                #     _, ix = torch.topk(probs, k=1, dim=-1)
-                #     # append to the sequence and continue
-                #     x = torch.cat((x, ix), dim=1)
 
-                # zs = [x]
                 pose_sample = vqvae.module.decode(zs)
 
                 if config.global_vel:
@@ -586,17 +519,6 @@ class AC():
 
     def _build_train_loader(self):
         self.training_data = None
-        # data = self.config.data
-        # if data.name == "aist":
-        #     print ("train with AIST++ dataset!")
-        #     train_music_data, train_dance_data, _ = load_data_aist(
-        #         data.train_dir, interval=data.seq_len, move=self.config.move if hasattr(self.config, 'move') else 64, rotmat=self.config.rotmat, external_wav=self.config.external_wav if hasattr(self.config, 'external_wav') else None, external_wav_rate=self.config.ds_rate//self.config.external_wav_rate if hasattr(self.config, 'external_wav_rate') else 1, music_normalize=self.config.music_normalize if hasattr(self.config, 'music_normalize') else False)
-        # else:
-        #     train_music_data, train_dance_data = load_data(
-        #         args_train.train_dir, 
-        #         interval=data.seq_len,
-        #         data_type=data.data_type)
-        # self.training_data = prepare_dataloader(train_music_data, train_dance_data, self.config.batch_size)
 
     def _build_test_loader(self):
         config = self.config
